@@ -2,6 +2,39 @@ import { NextRequest, NextResponse } from 'next/server';
 import { Client, Environment } from 'square';
 import { randomUUID } from 'crypto';
 
+// TypeScript interfaces for request data
+interface CartItem {
+  id: string;
+  quantity: number;
+  name: string;
+  price: number;
+  variationName?: string;
+}
+
+interface CustomerDetails {
+  firstName: string;
+  lastName: string;
+  email: string;
+  phone: string;
+}
+
+interface PickupDetails {
+  type: 'ASAP' | 'SCHEDULED';
+  time?: string;
+}
+
+interface OrderDetails {
+  items: CartItem[];
+  customer: CustomerDetails;
+  pickup: PickupDetails;
+  pickupNotes?: string;
+}
+
+interface PaymentDetails {
+  sourceId: string;
+  amount: number;
+}
+
 // Initialize Square client
 const initSquareClient = () => {
   const accessToken = process.env.SQUARE_ACCESS_TOKEN;
@@ -19,28 +52,26 @@ const initSquareClient = () => {
   });
 };
 
+interface CheckoutRequestBody {
+  orderDetails: OrderDetails;
+  paymentDetails: PaymentDetails;
+}
+
 export async function POST(request: NextRequest) {
   try {
-    console.log('Payment request received');
-    const requestBody = await request.json();
-    const { orderId, sourceId, customerDetails } = requestBody;
+    console.log('Checkout request received');
+    const requestBody = await request.json() as CheckoutRequestBody;
+    const { orderDetails, paymentDetails } = requestBody;
     
-    console.log('Payment request data:', {
-      orderId,
-      sourceIdProvided: !!sourceId,
-      customerProvided: !!customerDetails
-    });
-    
-    if (!orderId) {
-      console.error('Payment request missing order ID');
+    // Validate required data
+    if (!orderDetails?.items || orderDetails.items.length === 0) {
       return NextResponse.json(
-        { error: 'Order ID is required' },
+        { error: 'Order items are required' },
         { status: 400 }
       );
     }
     
-    if (!sourceId) {
-      console.error('Payment request missing source ID');
+    if (!paymentDetails?.sourceId) {
       return NextResponse.json(
         { error: 'Payment source ID is required' },
         { status: 400 }
@@ -51,28 +82,89 @@ export async function POST(request: NextRequest) {
     const locationId = process.env.SQUARE_LOCATION_ID;
     
     if (!locationId) {
-      console.error('Square location ID not configured');
       return NextResponse.json(
-        { error: 'Square location ID not configured' },
+        { error: 'Square location ID is not configured' },
         { status: 500 }
       );
     }
     
-    // First, retrieve the order to get the current amount
-    console.log(`Retrieving order details for order ID: ${orderId}`);
-    const orderResult = await squareClient.ordersApi.retrieveOrder(orderId);
+    console.log('Request body received:', JSON.stringify(orderDetails, null, 2));
     
-    if (!orderResult.result.order) {
-      console.error(`Order ${orderId} not found in Square`);
+    // Generate idempotency keys - unique per request
+    const orderIdempotencyKey = `order_${Date.now()}_${Math.random().toString(36).substring(2, 10)}`;
+    
+    // STEP 1: Create Square line items from cart items
+    const lineItems = orderDetails.items.map((item: CartItem) => ({
+      quantity: item.quantity.toString(),
+      catalogObjectId: item.id,  // This is the Square catalog item ID
+      note: item.variationName || undefined
+    }));
+
+    // Set pickup time for fulfillment
+    let pickupAt;
+    
+    if (orderDetails.pickup.type === 'ASAP') {
+      // For ASAP orders, use current time plus 15 minutes
+      const now = new Date();
+      now.setMinutes(now.getMinutes() + 15); // 15 minute buffer
+      pickupAt = now.toISOString();
+      console.log(`Using current time for ASAP pickup: ${pickupAt}`);
+    } else if (orderDetails.pickup.type === 'SCHEDULED' && orderDetails.pickup.time) {
+      // For scheduled pickups, use the selected time
+      pickupAt = orderDetails.pickup.time;
+    } else {
       return NextResponse.json(
-        { error: 'Order not found' },
-        { status: 404 }
+        { error: 'Invalid pickup type or missing scheduled time' },
+        { status: 400 }
       );
     }
     
-    console.log(`Successfully retrieved order ${orderId}`);
+    console.log(`Using pickup_at timestamp: ${pickupAt}`);
     
-    const order = orderResult.result.order;
+    // Create fulfillment object for pickup details
+    const fulfillmentDetails = {
+      type: 'PICKUP',
+      state: 'PROPOSED',
+      pickupDetails: {
+        recipient: {
+          displayName: `${orderDetails.customer.firstName} ${orderDetails.customer.lastName}`,
+          emailAddress: orderDetails.customer.email,
+          phoneNumber: orderDetails.customer.phone
+        },
+        pickupAt
+      }
+    };
+    
+    console.log('Final pickup details being sent to Square:', JSON.stringify(fulfillmentDetails.pickupDetails, null, 2));
+    
+    // Prepare the create order request
+    const createOrderRequest = {
+      order: {
+        locationId,
+        lineItems,
+        state: 'OPEN',
+        fulfillments: [fulfillmentDetails],
+        metadata: {
+          orderSource: 'Online Ordering Site'
+        }
+      },
+      idempotencyKey: orderIdempotencyKey
+    };
+    
+    console.log('Complete Square order request:', JSON.stringify(createOrderRequest, null, 2));
+    
+    // STEP 2: Create the order in Square
+    const orderResponse = await squareClient.ordersApi.createOrder(createOrderRequest);
+    
+    if (!orderResponse.result?.order?.id) {
+      throw new Error('Failed to create order');
+    }
+    
+    const orderId = orderResponse.result.order.id;
+    console.log(`Order created with ID: ${orderId}`);
+    
+    // STEP 3: Process payment for the newly created order
+    const order = orderResponse.result.order;
     const totalMoney = order.netAmountDueMoney || order.totalMoney;
     
     if (!totalMoney) {
@@ -82,9 +174,9 @@ export async function POST(request: NextRequest) {
       );
     }
     
-    // Create unique idempotency key for this payment - using UUID for better uniqueness
-    const idempotencyKey = `payment_${randomUUID()}`;
-    console.log(`Processing payment for order ${orderId} with idempotency key ${idempotencyKey}`);
+    // Create unique idempotency key for payment
+    const paymentIdempotencyKey = `payment_${randomUUID()}`;
+    console.log(`Processing payment for order ${orderId} with idempotency key ${paymentIdempotencyKey}`);
     
     // Log order details before payment
     console.log('Order details:', {
@@ -96,12 +188,12 @@ export async function POST(request: NextRequest) {
     
     // Create payment request object
     const paymentRequest = {
-      sourceId,
-      idempotencyKey,
+      sourceId: paymentDetails.sourceId,
+      idempotencyKey: paymentIdempotencyKey,
       amountMoney: totalMoney,
       orderId,
       // Add customer to payment if we have details
-      buyerEmailAddress: customerDetails?.email,
+      buyerEmailAddress: orderDetails.customer.email,
       locationId,
       autocomplete: true, // Auto-complete the payment (no further capture needed)
     };
@@ -140,12 +232,10 @@ export async function POST(request: NextRequest) {
       throw new Error('Payment processing failed');
     }
     
-    // NOTE: We're intentionally not updating the order status to COMPLETED
+    // We're intentionally not updating the order status to COMPLETED
     // This keeps the order in OPEN state with PROPOSED fulfillment
     // so it shows up in Square POS for staff to manually process
     console.log(`Keeping order ${orderId} in OPEN state for staff fulfillment via Square POS`);
-    // The order will remain in OPEN state with its original fulfillment status
-    console.log('Continuing as payment was successful');
     
     // Prepare response data
     const responseData = {
@@ -166,7 +256,7 @@ export async function POST(request: NextRequest) {
     // Return payment confirmation details
     return NextResponse.json(responseData);
   } catch (error: any) {
-    console.error('Error processing payment:', error);
+    console.error('Error processing checkout:', error);
     
     // Log detailed error information
     if (error.errors) {
@@ -187,7 +277,7 @@ export async function POST(request: NextRequest) {
     
     // Return appropriate error response
     return NextResponse.json(
-      { error: error.message || 'Failed to process payment' },
+      { error: error.message || 'Failed to complete checkout' },
       { status: error.statusCode || 500 }
     );
   }

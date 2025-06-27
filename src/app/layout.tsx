@@ -23,7 +23,7 @@ export default function RootLayout({
 }) {
   return (
     <html lang="en" className={inter.variable}>
-      <body className="flex flex-col min-h-screen">
+      <body className="flex flex-col min-h-screen bg-gradient-to-b from-sky-blue/30 via-white to-sandy-beige/20">
         <ClientProviders>
           <Header />
           <main className="flex-grow container mx-auto px-4 py-8">

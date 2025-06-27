@@ -145,84 +145,24 @@ export default function CheckoutForm() {
     const formattedPhone = formatPhoneForSquare(formData.phone);
     
     try {
-      // Step 1: Create order in Square
-      const orderResponse = await fetch('/api/orders', {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({
-          items,
-          customer: {
-            firstName: formData.firstName,
-            lastName: formData.lastName,
-            email: formData.email,
-            phone: formattedPhone, // Use E.164 formatted phone
-          },
-          pickup: {
-            type: formData.pickupType,
-            ...(formData.pickupType === 'SCHEDULED' && {
-              time: new Date(formData.pickupTime).toISOString()
-            })
-          },
-          pickupNotes: formData.pickupNotes,
-        }),
-      });
-      
-      if (!orderResponse.ok) {
-        throw new Error('Failed to create order');
-      }
-      
-      const { orderId, paymentDetails } = await orderResponse.json();
-      
-      // Step 2: Process payment with Square
+      // Step 1: First, tokenize the card payment using Square Web Payments SDK
       if (!squarePayments) {
         throw new Error('Square payments not initialized');
       }
       
       console.log('Beginning payment tokenization...');
       
-      // Get payment token from Square using the existing card instance
+      // Verify the card instance exists
       if (!cardInstanceRef.current) {
         throw new Error('Card payment form not properly initialized');
       }
       
-      // Use the existing card instance that's already attached to the DOM
+      // Use the existing card instance that's already attached to the DOM to tokenize
       const paymentResults = await cardInstanceRef.current.tokenize();
       
       console.log('Tokenization result status:', paymentResults.status);
       
-      if (paymentResults.status === 'OK') {
-        // Step 3: Send payment token to our API for processing
-        const paymentResponse = await fetch('/api/payments', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify({
-            orderId,
-            sourceId: paymentResults.token,
-            amount: subtotal,
-            customerDetails: {
-              firstName: formData.firstName,
-              lastName: formData.lastName,
-              email: formData.email,
-              phone: formattedPhone, // Use E.164 formatted phone
-            },
-          }),
-        });
-        
-        if (!paymentResponse.ok) {
-          throw new Error('Payment processing failed');
-        }
-        
-        // Get payment confirmation
-        const paymentResult = await paymentResponse.json();
-        
-        // Success - clear cart and redirect to confirmation page
-        clearCart();
-        router.push(`/order-confirmation?id=${paymentResult.paymentId}`);
-      } else {
+      if (paymentResults.status !== 'OK') {
         console.error('Tokenization failed:', paymentResults.errors);
         throw new Error(
           paymentResults.errors && paymentResults.errors.length > 0
@@ -230,6 +170,54 @@ export default function CheckoutForm() {
             : 'Payment tokenization failed'
         );
       }
+      
+      // Step 2: Send order details and payment token to combined API endpoint
+      // that will create order and process payment in one step
+      console.log('Sending order and payment details to backend...');
+      
+      const checkoutResponse = await fetch('/api/checkout', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          // Order details
+          orderDetails: {
+            items,
+            customer: {
+              firstName: formData.firstName,
+              lastName: formData.lastName,
+              email: formData.email,
+              phone: formattedPhone, // Use E.164 formatted phone
+            },
+            pickup: {
+              type: formData.pickupType,
+              ...(formData.pickupType === 'SCHEDULED' && {
+                time: new Date(formData.pickupTime).toISOString()
+              })
+            },
+            pickupNotes: formData.pickupNotes,
+          },
+          // Payment details
+          paymentDetails: {
+            sourceId: paymentResults.token,
+            amount: subtotal,
+          }
+        }),
+      });
+      
+      if (!checkoutResponse.ok) {
+        const errorData = await checkoutResponse.json();
+        throw new Error(errorData.error || 'Checkout process failed');
+      }
+      
+      // Get payment confirmation
+      const checkoutResult = await checkoutResponse.json();
+      
+      // Success - clear cart and redirect to confirmation page
+      clearCart();
+      router.push(`/order-confirmation?id=${checkoutResult.paymentId}`);
+      
     } catch (err: any) {
       console.error('Checkout error:', err);
       
