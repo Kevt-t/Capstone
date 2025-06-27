@@ -4,6 +4,12 @@ import { Inter } from 'next/font/google';
 import Header from '@/components/layout/Header';
 import Footer from '@/components/layout/Footer';
 import ClientProviders from '@/components/providers/ClientProviders';
+import dynamic from 'next/dynamic';
+
+const ChatbotIntegration = dynamic(
+  () => import('@/components/chatbot/ChatbotIntegration'),
+  { ssr: false }
+);
 
 const inter = Inter({ 
   subsets: ['latin'],
@@ -30,6 +36,7 @@ export default function RootLayout({
             {children}
           </main>
           <Footer />
+          <ChatbotIntegration />
         </ClientProviders>
       </body>
     </html>
