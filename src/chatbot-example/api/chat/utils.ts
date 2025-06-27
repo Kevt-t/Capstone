@@ -1,0 +1,88 @@
+export const BASE_URL = "https://www.playlab.ai/api/v1";
+
+export async function createConversation(PROJECT_ID: string, API_KEY: string) {
+  // Make a POST request to create a new conversation
+  const res = await fetch(`${BASE_URL}/projects/${PROJECT_ID}/conversations`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${API_KEY}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({}),
+  });
+  // Handle error response
+  if (!res.ok) {
+    const text = await res.text();
+    console.error("Conversation creation failed:", text);
+    return null;
+  }
+  // Extract and return the conversation object
+  const { conversation } = await res.json();
+  return conversation;
+}
+
+export async function sendMessage(PROJECT_ID: string, API_KEY: string, conversationId: string, userPrompt: string) {
+  // Send user message to an existing conversation
+  const res = await fetch(`${BASE_URL}/projects/${PROJECT_ID}/conversations/${conversationId}/messages`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${API_KEY}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      input: {
+        message: userPrompt,
+      },
+    }),
+  });
+  // Handle error or missing response body
+  if (!res.ok || !res.body) {
+    const text = await res.text();
+    console.error("Message sending failed:", text);
+    return null;
+  }
+  // Return the response body stream for processing
+  return res.body;
+}
+
+export function extractDeltaFromLine(line: string): string {
+  // Skip lines that don't start with "data:"
+  if (!line.startsWith("data:")) return "";
+  try {
+    // Parse the JSON data and extract the delta field
+    const json = JSON.parse(line.replace("data: ", ""));
+    return json?.delta ?? "";
+  } catch {
+    // Ignore invalid lines
+    return "";
+  }
+}
+
+export function processChunk(chunk: string): string {
+  // Split the chunk into lines, extract deltas, filter empty results, and join
+  return chunk
+    .split("\n")
+    .map(extractDeltaFromLine)
+    .filter(Boolean)
+    .join("");
+}
+
+export async function readSSEStream(body: ReadableStream<Uint8Array>) {
+  // Create a reader for the stream and a decoder for UTF-8 text
+  const reader = body.getReader();
+  const decoder = new TextDecoder("utf-8");
+  let fullResponse = "";
+  let done = false;
+
+  // Process the stream chunk by chunk until done
+  while (!done) {
+    const { value, done: streamDone } = await reader.read();
+    done = streamDone;
+    if (value) {
+      // Decode and process each chunk, adding to the full response
+      const chunk = decoder.decode(value);
+      fullResponse += processChunk(chunk);
+    }
+  }
+  return fullResponse;
+}

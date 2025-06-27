@@ -54,7 +54,7 @@ export async function createOrder(cartItems: CartItem[], customerData?: any) {
           {
             name: 'Convenience Fee',
             amountMoney: {
-              amount: 100, // $1.00 fee
+              amount: BigInt(100), // $1.00 fee
               currency: 'USD',
             },
             calculationPhase: 'TOTAL_PHASE',
