@@ -5,48 +5,61 @@ import { useSearchParams } from 'next/navigation';
 import { useEffect, useState } from 'react';
 import { FaCheck, FaReceipt } from 'react-icons/fa';
 
-interface OrderDetails {
+interface PaymentDetails {
+  paymentId: string;
   orderId: string;
-  receiptUrl?: string;
   status: string;
+  amount: number;
+  currency: string;
+  receiptUrl?: string;
   createdAt: string;
+  cardDetails?: {
+    brand: string;
+    last4: string;
+  };
+  orderDetails?: {
+    id: string;
+    state: string;
+    createdAt: string;
+  };
 }
 
 export default function OrderConfirmationPage() {
   const searchParams = useSearchParams();
-  const [orderDetails, setOrderDetails] = useState<OrderDetails | null>(null);
+  const [paymentDetails, setPaymentDetails] = useState<PaymentDetails | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   
   const paymentId = searchParams.get('id');
   
   useEffect(() => {
-    async function fetchOrderDetails() {
+    async function fetchPaymentDetails() {
       if (!paymentId) {
-        setError('No order ID provided');
+        setError('No payment ID provided');
         setLoading(false);
         return;
       }
       
       try {
-        // In a real application, you would fetch the order details from your API
-        // For demo purposes, we'll simulate this with a timeout
-        setTimeout(() => {
-          setOrderDetails({
-            orderId: `ORDER-${Math.random().toString(36).substring(2, 10).toUpperCase()}`,
-            receiptUrl: 'https://squareup.com/receipt/preview',
-            status: 'COMPLETED',
-            createdAt: new Date().toISOString(),
-          });
-          setLoading(false);
-        }, 1000);
-      } catch (err) {
-        setError('Failed to load order details');
+        // Fetch payment details from our API
+        const response = await fetch(`/api/payment-details?id=${paymentId}`);
+        
+        if (!response.ok) {
+          throw new Error(`Failed to fetch payment details: ${response.status}`);
+        }
+        
+        const data = await response.json();
+        setPaymentDetails(data);
+        console.log('Payment details loaded:', data);
+      } catch (err: any) {
+        console.error('Error fetching payment details:', err);
+        setError(err.message || 'Failed to load payment details');
+      } finally {
         setLoading(false);
       }
     }
     
-    fetchOrderDetails();
+    fetchPaymentDetails();
   }, [paymentId]);
   
   if (loading) {
@@ -58,7 +71,7 @@ export default function OrderConfirmationPage() {
     );
   }
   
-  if (error || !orderDetails) {
+  if (error || !paymentDetails) {
     return (
       <div className="bg-white rounded-lg shadow-md p-6 max-w-md mx-auto">
         <h1 className="text-xl font-bold mb-4 text-red-600">Error</h1>
@@ -84,23 +97,41 @@ export default function OrderConfirmationPage() {
         </div>
         
         <div className="p-6 border-t border-gray-100">
-          <h2 className="text-lg font-semibold mb-4">Order Details</h2>
+          <h2 className="text-lg font-semibold mb-4">Payment Details</h2>
           
           <div className="space-y-3">
             <div className="flex justify-between">
-              <span className="text-gray-600">Order Number:</span>
-              <span className="font-medium">{orderDetails.orderId}</span>
+              <span className="text-gray-600">Order ID:</span>
+              <span className="font-medium">{paymentDetails.orderId}</span>
+            </div>
+            <div className="flex justify-between">
+              <span className="text-gray-600">Payment ID:</span>
+              <span className="font-medium">{paymentDetails.paymentId}</span>
             </div>
             <div className="flex justify-between">
               <span className="text-gray-600">Status:</span>
               <span className="font-medium text-green-600">
-                {orderDetails.status === 'COMPLETED' ? 'Confirmed' : orderDetails.status}
+                {paymentDetails.status}
               </span>
             </div>
             <div className="flex justify-between">
+              <span className="text-gray-600">Amount:</span>
+              <span className="font-medium">
+                {(paymentDetails.amount / 100).toFixed(2)} {paymentDetails.currency}
+              </span>
+            </div>
+            {paymentDetails.cardDetails && (
+              <div className="flex justify-between">
+                <span className="text-gray-600">Card:</span>
+                <span className="font-medium">
+                  {paymentDetails.cardDetails.brand} •••• {paymentDetails.cardDetails.last4}
+                </span>
+              </div>
+            )}
+            <div className="flex justify-between">
               <span className="text-gray-600">Order Date:</span>
               <span className="font-medium">
-                {new Date(orderDetails.createdAt).toLocaleString()}
+                {new Date(paymentDetails.createdAt).toLocaleString()}
               </span>
             </div>
           </div>
@@ -113,13 +144,13 @@ export default function OrderConfirmationPage() {
             </p>
           </div>
           
-          {orderDetails.receiptUrl && (
+          {paymentDetails.receiptUrl && (
             <div className="mt-6">
-              <a 
-                href={orderDetails.receiptUrl}
+              <a
+                href={paymentDetails.receiptUrl}
                 target="_blank"
-                rel="noopener noreferrer" 
-                className="flex items-center justify-center gap-2 text-primary hover:text-primary-dark"
+                rel="noopener noreferrer"
+                className="flex items-center justify-center gap-2 bg-gray-100 text-gray-800 py-2 px-4 rounded mt-6 hover:bg-gray-200 transition-colors"
               >
                 <FaReceipt />
                 View Receipt

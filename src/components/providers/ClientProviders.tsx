@@ -2,6 +2,7 @@
 
 import { ReactNode } from 'react';
 import { CartProvider } from '@/context/CartContext';
+import SquarePaymentsProvider from './SquarePaymentsProvider';
 
 interface ClientProvidersProps {
   children: ReactNode;
@@ -10,7 +11,9 @@ interface ClientProvidersProps {
 export default function ClientProviders({ children }: ClientProvidersProps) {
   return (
     <CartProvider>
-      {children}
+      <SquarePaymentsProvider>
+        {children}
+      </SquarePaymentsProvider>
     </CartProvider>
   );
 }

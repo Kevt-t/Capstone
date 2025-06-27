@@ -5,6 +5,7 @@ import { useRouter } from 'next/navigation';
 import { useCartItems, useClearCart } from '@/hooks/useCart';
 import PhoneInput from './PhoneInput';
 import { formatPhoneForSquare } from '@/utils/phoneFormatting';
+import { useSquarePayments } from '../providers/SquarePaymentsProvider';
 
 export default function CheckoutForm() {
   const router = useRouter();
@@ -43,33 +44,74 @@ export default function CheckoutForm() {
   const minPickupTime = getMinPickupTime();
   
   // Square payment form references
-  const cardPaymentElement = useRef<any>(null);
+  const cardPaymentElement = useRef<HTMLDivElement>(null);
+  const cardInstanceRef = useRef<any>(null); // Store card instance for cleanup
+  const cardInitializedRef = useRef(false); // Track if card is already initialized
   
-  // Initialize Square Payment form
+  // Use Square context
+  const { squarePayments, loaded: squareLoaded, error: squareError } = useSquarePayments();
+  
+  // Initialize Square Payment form with cleanup
   useEffect(() => {
-    async function initializeSquare() {
-      if (!window.squarePayments || cardPaymentElement.current === null) {
-        return;
+    async function initializeCard() {
+      if (!squareLoaded || !squarePayments || cardPaymentElement.current === null || cardInitializedRef.current) {
+        return; // Skip if already initialized or missing dependencies
       }
-
+      
       try {
-        const card = await window.squarePayments.card();
+        // Mark as initializing to prevent duplicate initialization
+        cardInitializedRef.current = true;
+        console.log('Initializing Square Card payment form...');
+        
+        const card = await squarePayments.card({
+          // Square card element options
+          style: {
+            '.input-container': {
+              borderColor: '#E0E0E0',
+              borderRadius: '4px'
+            }
+          }
+        });
+        
+        // Store the card instance for cleanup
+        cardInstanceRef.current = card;
+        
+        // Attach the card to the DOM
         await card.attach(cardPaymentElement.current);
         setCardPaymentReady(true);
-        return card;
+        console.log('Square Card payment form initialized successfully');
       } catch (e) {
         console.error('Error initializing Square Card:', e);
         setError('Failed to load payment form. Please refresh and try again.');
+        cardInitializedRef.current = false; // Reset flag if initialization failed
       }
     }
 
-    // Short delay to ensure DOM is ready
-    const timeoutId = setTimeout(() => {
-      initializeSquare();
-    }, 1000);
-
-    return () => clearTimeout(timeoutId);
-  }, []);
+    if (squareLoaded && squarePayments) {
+      initializeCard();
+    }
+    
+    // Cleanup function to destroy card instance when component unmounts
+    return () => {
+      if (cardInstanceRef.current) {
+        try {
+          console.log('Cleaning up Square Card payment form');
+          cardInstanceRef.current.destroy();
+        } catch (e) {
+          console.error('Error cleaning up Square Card:', e);
+        }
+        cardInstanceRef.current = null;
+        cardInitializedRef.current = false;
+      }
+    };
+  }, [squareLoaded, squarePayments]);
+  
+  // Display Square provider errors
+  useEffect(() => {
+    if (squareError) {
+      setError(`Payment system error: ${squareError}`);
+    }
+  }, [squareError]);
   
   // Handle form input changes
   const handleInputChange = (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement | HTMLSelectElement>) => {
@@ -134,12 +176,21 @@ export default function CheckoutForm() {
       const { orderId, paymentDetails } = await orderResponse.json();
       
       // Step 2: Process payment with Square
-      if (!window.squarePayments) {
+      if (!squarePayments) {
         throw new Error('Square payments not initialized');
       }
       
-      // Get payment token from Square
-      const paymentResults = await window.squarePayments.card().tokenize();
+      console.log('Beginning payment tokenization...');
+      
+      // Get payment token from Square using the existing card instance
+      if (!cardInstanceRef.current) {
+        throw new Error('Card payment form not properly initialized');
+      }
+      
+      // Use the existing card instance that's already attached to the DOM
+      const paymentResults = await cardInstanceRef.current.tokenize();
+      
+      console.log('Tokenization result status:', paymentResults.status);
       
       if (paymentResults.status === 'OK') {
         // Step 3: Send payment token to our API for processing
@@ -172,11 +223,33 @@ export default function CheckoutForm() {
         clearCart();
         router.push(`/order-confirmation?id=${paymentResult.paymentId}`);
       } else {
-        throw new Error(paymentResults.errors[0]?.message || 'Payment tokenization failed');
+        console.error('Tokenization failed:', paymentResults.errors);
+        throw new Error(
+          paymentResults.errors && paymentResults.errors.length > 0
+            ? paymentResults.errors[0].message
+            : 'Payment tokenization failed'
+        );
       }
     } catch (err: any) {
       console.error('Checkout error:', err);
-      setError(err.message || 'An error occurred during checkout');
+      
+      // Detailed logging for debugging
+      if (err?.errors) {
+        console.error('API errors:', JSON.stringify(err.errors, null, 2));
+      }
+      
+      let errorMessage = 'An error occurred during checkout';
+      
+      // Better error messages for users
+      if (err.message?.includes('card')) {
+        errorMessage = 'There was an issue with your card. Please check your payment details and try again.';
+      } else if (err.message?.includes('network')) {
+        errorMessage = 'Network error. Please check your connection and try again.';
+      } else if (err.message) {
+        errorMessage = err.message;
+      }
+      
+      setError(errorMessage);
     } finally {
       setIsLoading(false);
       setPaymentInProgress(false);
@@ -327,7 +400,8 @@ export default function CheckoutForm() {
         <div className="mb-8">
           <h3 className="text-lg font-medium mb-4">Payment Information</h3>
           <div id="card-container" ref={cardPaymentElement} className="border border-gray-300 p-4 rounded-md min-h-[100px]">
-            {!cardPaymentReady && <p className="text-gray-500">Loading payment form...</p>}
+            {!squareLoaded && <p className="text-gray-500">Loading payment system...</p>}
+            {squareLoaded && !cardPaymentReady && <p className="text-gray-500">Initializing payment form...</p>}
           </div>
         </div>
         

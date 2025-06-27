@@ -22,5 +22,8 @@ interface SquarePayments {
 }
 
 interface Window {
+  Square?: {
+    payments(applicationId: string, locationId: string): SquarePayments;
+  };
   squarePayments?: SquarePayments;
 }
